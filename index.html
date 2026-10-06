@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MaxMulSK: FP32 GEMM for Apple M4</title>
+<meta name="description" content="MaxMulSK: an FP32 GEMM (matrix multiplication) library for the Apple M4, written against Arm SME/SME2. MaxMulSK Trio keeps the M4's SME busy with one thread that only computes, fed by two NEON threads. Benchmarked against Apple Accelerate and MpGEMM.">
+<meta property="og:title" content="MaxMulSK: FP32 GEMM for Apple M4">
+<meta property="og:description" content="FP32 SME/SME2 GEMM for Apple M4. MaxMulSK Trio: one SME thread that only computes, fed by two NEON threads. 1.37x Accelerate (multi-threaded) on 35 shapes, cold.">
+<link rel="canonical" href="https://ulassertan.github.io/">
+<style>
+:root{--bg:#ffffff;--fg:#1d1d1f;--mut:#6e6e73;--line:#e5e5ea;--card:#fbfbfd;--acc:#0a7d6e;--neon:#3f6fb5}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:980px;margin:0 auto;padding:0 20px}
+header{padding:64px 0 28px}
+.eyebrow{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);font-weight:600}
+h1{font-size:44px;line-height:1.1;margin:8px 0 14px;letter-spacing:-.02em;font-weight:700}
+.links{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+.btn{display:inline-block;padding:9px 16px;border-radius:10px;border:1px solid var(--line);color:var(--fg);text-decoration:none;font-size:15px;font-weight:500}
+.btn.primary{background:var(--fg);color:#fff;border-color:var(--fg)}
+.btn:hover{border-color:#c7c7cc}
+.lead{font-size:19px;color:#3a3a3c;max-width:760px;margin:0}
+h2{font-size:26px;letter-spacing:-.01em;margin:64px 0 10px;font-weight:650}
+p{margin:0 0 12px}
+.mut{color:var(--mut)}
+/* placeholders: Ulaş writes these; the dashed box and the note disappear when replaced */
+.todo{border:1.5px dashed #c7c7cc;border-radius:12px;padding:12px 14px;margin:10px 0;background:#fafafa;color:#8e8e93;font-size:14.5px}
+.todo b{color:#3a3a3c;display:block;font-size:13px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:2px}
+.diagram{border:1px solid var(--line);border-radius:16px;background:var(--card);padding:18px 14px 8px;margin:18px 0 8px;overflow-x:auto}
+.diagram svg{display:block;width:100%;min-width:640px;height:auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:18px 0}
+.stat{border:1px solid var(--line);border-radius:14px;padding:16px 18px;background:var(--card)}
+.stat b{display:block;font-size:30px;letter-spacing:-.02em;line-height:1.15}
+.stat span{font-size:14px;color:var(--mut)}
+.charts{display:grid;gap:14px;margin:14px 0}
+.chart{border:1px solid var(--line);border-radius:16px;padding:10px;overflow-x:auto}
+.chart img{display:block;width:100%;min-width:560px;height:auto}
+.kernels{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+.k{position:relative;border:1px solid var(--line);border-radius:18px;padding:26px 24px 22px;background:var(--card);overflow:hidden}
+.k::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:var(--c)}
+.k.trio{--c:var(--acc)}.k.v51{--c:var(--neon)}
+.k .tag{font-size:12.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--c)}
+.k h3{font-size:24px;margin:6px 0 2px;letter-spacing:-.01em}
+.k .sub{color:var(--mut);font-size:14.5px;margin-bottom:14px}
+.k .nums{display:flex;gap:22px;flex-wrap:wrap;padding:12px 0 14px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-bottom:12px}
+.k .nums div b{display:block;font-size:24px;letter-spacing:-.02em;line-height:1.2}
+.k .nums div span{font-size:12.5px;color:var(--mut)}
+.k a{display:inline-block;margin-top:6px;color:var(--c);text-decoration:none;font-weight:600;font-size:14.5px}
+@media (max-width:760px){.kernels{grid-template-columns:1fr}h1{font-size:34px}header{padding-top:40px}}
+.cta{margin-top:64px;border:1px solid var(--line);border-radius:18px;padding:28px 24px;background:var(--card);text-align:center}
+.cta h2{margin:0 0 8px}
+.cta .links{justify-content:center}
+footer{margin:56px 0 40px;padding-top:20px;border-top:1px solid var(--line);font-size:14px;color:var(--mut)}
+footer a,.inline{color:var(--acc);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">MaxMulSK · Apple M4 · Arm SME/SME2</div>
+  <h1>FP32 GEMM for Apple M4</h1>
+  <p class="lead">MaxMulSK started as a place to try the fun optimization tricks I learned in one of my courses. It slowly grew into an FP32 GEMM library for the Apple M4 (base model). I've tried a lot of tricks and ideas on these kernels along the way, and Trio and v5.1 are the best ones I've built so far.</p>
+  <div class="links">
+    <a class="btn primary" href="https://github.com/UlasSertan/MaxMulSK">Code on GitHub</a>
+    <a class="btn" href="https://github.com/UlasSertan/MaxMulSK/releases/tag/trio-2026.10.06">Release: Trio and v5.1</a>
+    <a class="btn" href="https://github.com/UlasSertan/MaxMulSK#maxmulsk-trio-and-v51">Design notes</a>
+  </div>
+</header>
+
+<h2>Trio in one picture</h2>
+<p>Trio is a multi-threaded GEMM kernel, but not in the way you might expect. The base M4 has only one SME unit for its performance cores (the M4 Pro and Max have two), so Trio doesn't split the work across several SMEs. It adds two NEON threads instead, and gives them everything that isn't compute.</p>
+<div class="diagram" role="img" aria-label="MaxMulSK Trio: two NEON threads read A and B from memory, copy B and transpose A into rings in the L2 cache; one SME thread reads the rings, computes and writes C.">
+<svg viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,BlinkMacSystemFont,'SF Pro Text',Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8e8e93"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#0a7d6e"/></marker>
+  </defs>
+
+  <!-- memory -->
+  <rect x="20" y="70" width="130" height="280" rx="14" fill="#fff" stroke="#d1d1d6"/>
+  <text x="85" y="100" text-anchor="middle" font-size="15" font-weight="650" fill="#1d1d1f">Memory</text>
+  <rect x="45" y="125" width="80" height="60" rx="8" fill="#f2f2f5" stroke="#d1d1d6"/><text x="85" y="161" text-anchor="middle" font-size="16" font-weight="600" fill="#3a3a3c">A</text>
+  <rect x="45" y="205" width="80" height="60" rx="8" fill="#f2f2f5" stroke="#d1d1d6"/><text x="85" y="241" text-anchor="middle" font-size="16" font-weight="600" fill="#3a3a3c">B</text>
+  <rect x="45" y="285" width="80" height="45" rx="8" fill="#e8f4f1" stroke="#9fd0c4"/><text x="85" y="313" text-anchor="middle" font-size="16" font-weight="600" fill="#0a7d6e">C</text>
+
+  <!-- NEON threads -->
+  <rect x="210" y="70" width="190" height="125" rx="14" fill="#f3f6fb" stroke="#b9cbe6"/>
+  <text x="305" y="100" text-anchor="middle" font-size="15" font-weight="650" fill="#2c5592">NEON thread 1</text>
+  <text x="305" y="125" text-anchor="middle" font-size="13" fill="#3a3a3c">B: copy, non-temporal loads</text>
+  <text x="305" y="146" text-anchor="middle" font-size="13" fill="#3a3a3c">A: 4×4 transpose</text>
+  <text x="305" y="176" text-anchor="middle" font-size="12" fill="#6e6e73">sleeps (WFE) when nothing is free</text>
+
+  <rect x="210" y="225" width="190" height="125" rx="14" fill="#f3f6fb" stroke="#b9cbe6"/>
+  <text x="305" y="255" text-anchor="middle" font-size="15" font-weight="650" fill="#2c5592">NEON thread 2</text>
+  <text x="305" y="280" text-anchor="middle" font-size="13" fill="#3a3a3c">same work, other pieces</text>
+  <text x="305" y="301" text-anchor="middle" font-size="13" fill="#3a3a3c">A pieces before B pieces</text>
+  <text x="305" y="331" text-anchor="middle" font-size="12" fill="#6e6e73">sleeps (WFE) when nothing is free</text>
+
+  <!-- L2 rings -->
+  <rect x="455" y="40" width="215" height="340" rx="16" fill="#fffaf0" stroke="#e7d3a8" stroke-dasharray="5 4"/>
+  <text x="562" y="66" text-anchor="middle" font-size="13" font-weight="600" fill="#8a6d1f">L2 cache</text>
+  <text x="562" y="104" text-anchor="middle" font-size="14" font-weight="650" fill="#1d1d1f">A ring</text>
+  <g fill="#fff" stroke="#e0c788"><rect x="497" y="115" width="62" height="40" rx="6"/><rect x="565" y="115" width="62" height="40" rx="6"/></g>
+  <text x="562" y="174" text-anchor="middle" font-size="12" fill="#6e6e73">2 slots</text>
+  <text x="562" y="224" text-anchor="middle" font-size="14" font-weight="650" fill="#1d1d1f">B ring</text>
+  <g fill="#fff" stroke="#e0c788"><rect x="482" y="235" width="34" height="40" rx="6"/><rect x="521" y="235" width="34" height="40" rx="6"/><rect x="560" y="235" width="34" height="40" rx="6"/><rect x="599" y="235" width="34" height="40" rx="6"/></g>
+  <text x="562" y="294" text-anchor="middle" font-size="12" fill="#6e6e73">a few slots, reused in a circle</text>
+  <text x="562" y="340" text-anchor="middle" font-size="12" fill="#6e6e73">each slot has a flag:</text>
+  <text x="562" y="357" text-anchor="middle" font-size="12" fill="#6e6e73">"filled" / "free again"</text>
+
+  <!-- SME thread -->
+  <rect x="725" y="110" width="155" height="200" rx="16" fill="#eef8f5" stroke="#0a7d6e" stroke-width="1.5"/>
+  <text x="802" y="142" text-anchor="middle" font-size="15" font-weight="700" fill="#0a7d6e">SME thread</text>
+  <text x="802" y="170" text-anchor="middle" font-size="13" fill="#1d1d1f">only computes</text>
+  <text x="802" y="196" text-anchor="middle" font-size="12" fill="#3a3a3c">one streaming region</text>
+  <text x="802" y="214" text-anchor="middle" font-size="12" fill="#3a3a3c">per call</text>
+  <text x="802" y="240" text-anchor="middle" font-size="12" fill="#3a3a3c">FMOPA into ZA</text>
+  <text x="802" y="258" text-anchor="middle" font-size="12" fill="#3a3a3c">→ C writeback</text>
+  <text x="802" y="290" text-anchor="middle" font-size="11.5" fill="#6e6e73">(starts on the first</text>
+  <text x="802" y="304" text-anchor="middle" font-size="11.5" fill="#6e6e73">piece by itself)</text>
+
+  <!-- arrows: memory -> NEON -->
+  <path d="M125,155 C165,155 170,120 208,120" fill="none" stroke="#8e8e93" stroke-width="1.6" marker-end="url(#a)"/>
+  <path d="M125,235 C165,235 170,140 208,140" fill="none" stroke="#8e8e93" stroke-width="1.6" marker-end="url(#a)"/>
+  <path d="M125,160 C165,160 170,280 208,280" fill="none" stroke="#c7c7cc" stroke-width="1.3" marker-end="url(#a)"/>
+  <path d="M125,240 C165,240 170,300 208,300" fill="none" stroke="#c7c7cc" stroke-width="1.3" marker-end="url(#a)"/>
+  <!-- NEON -> rings -->
+  <path d="M400,115 C440,115 450,135 495,135" fill="none" stroke="#3f6fb5" stroke-width="1.8" marker-end="url(#a)"/>
+  <path d="M400,150 C440,150 445,255 480,255" fill="none" stroke="#3f6fb5" stroke-width="1.8" marker-end="url(#a)"/>
+  <path d="M400,270 C440,270 450,150 495,145" fill="none" stroke="#9fb6da" stroke-width="1.4" marker-end="url(#a)"/>
+  <path d="M400,300 C440,300 445,262 480,262" fill="none" stroke="#9fb6da" stroke-width="1.4" marker-end="url(#a)"/>
+  <!-- rings -> SME -->
+  <path d="M627,135 C680,135 690,170 723,170" fill="none" stroke="#0a7d6e" stroke-width="2" marker-end="url(#g)"/>
+  <path d="M633,255 C680,255 690,240 723,240" fill="none" stroke="#0a7d6e" stroke-width="2" marker-end="url(#g)"/>
+  <!-- SME -> C -->
+  <path d="M802,310 C802,395 160,400 125,322" fill="none" stroke="#0a7d6e" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#g)"/>
+  <text x="470" y="405" text-anchor="middle" font-size="12" fill="#0a7d6e">C written once per tile, straight from ZA</text>
+</svg>
+</div>
+<p>Before writing any code, while we were still benchmarking to learn what the M4 does under the hood, I settled on an architecture with two parts: data movement and compute. I wanted to optimize from the inside out: start from the highest end, pure SME compute, and then build everything around it as carefully as possible. That's how the NEON cores ended up with all the packing and data movement. As you can see above, the NEON threads bring A and B from memory into L2, transpose A, and fill small rings that the SME reads from. (The SME packs only the very first piece itself, to get going while the NEON threads wake up.) The SME does nothing but compute, so it can run at its limit.</p>
+
+<h2>Results</h2>
+<p>We got these numbers from a night-long cold benchmark on a MacBook Air with the base M4 (fanless). Cold means we let the CPU cool down between compute-heavy parts, so every library runs at the highest clock it can: every measurement block started with the CPU at or below 40 °C, and we checked the SME clock after every run and threw out anything that had throttled. We chose this to see each kernel's full potential, and to find bottlenecks without having to filter out clock, heat and other noise.</p>
+<div class="stats">
+  <div class="stat"><b>1.37×</b><span>Apple Accelerate, multi-threaded</span></div>
+  <div class="stat"><b>1.32×</b><span>MpGEMM, multi-threaded</span></div>
+  <div class="stat"><b>1.31×</b><span>MaxMulSK v5.1, single thread</span></div>
+  <div class="stat"><b>1912</b><span>GFLOP/s at 1024³, 95% of the SME's 2010 GFLOP/s ceiling</span></div>
+</div>
+<div class="charts">
+  <div class="chart"><img src="img/bench9_deepseek_m64.svg" alt="DeepSeek-V3 shapes with M = 64: GFLOP/s of MaxMulSK Trio, MaxMulSK v5.1, Accelerate and MpGEMM, single and multi-threaded"></div>
+  <div class="chart"><img src="img/bench9_llama.svg" alt="LLaMA shapes: GFLOP/s of MaxMulSK Trio, MaxMulSK v5.1, Accelerate and MpGEMM, single and multi-threaded"></div>
+  <div class="chart"><img src="img/bench9_square.svg" alt="Square GEMM: GFLOP/s of MaxMulSK Trio, MaxMulSK v5.1, Accelerate and MpGEMM, single and multi-threaded"></div>
+</div>
+<p>A cold benchmark shows potential really well, but in real use you rarely get a cooldown between computations, so heat matters too. We're working on a sustained benchmark for that. The shapes are classic squares, the DeepSeek-V3 and LLaMA shapes from the MpGEMM project, and a few LLM-shaped ones of our own, to see how the kernels behave across sizes and use cases (LLM, HPC and so on). All 35 shapes are on the <a class="inline" href="https://github.com/UlasSertan/MaxMulSK#results">GitHub page</a>.</p>
+
+<h2>Two kernels</h2>
+<div class="kernels">
+  <div class="k trio">
+    <div class="tag">Multi-threaded</div>
+    <h3>MaxMulSK Trio</h3>
+    <div class="sub">1 SME thread + 2 NEON threads</div>
+    <div class="nums">
+      <div><b>1.37×</b><span>Accelerate (MT)</span></div>
+      <div><b>1.32×</b><span>MpGEMM (MT)</span></div>
+      <div><b>1.31×</b><span>v5.1</span></div>
+    </div>
+    <p>One SME thread that does nothing but compute, and two NEON threads that keep it fed. Same math as v5.1 down to the last bit, written with intrinsics only, no assembly.</p>
+    <a href="https://github.com/UlasSertan/MaxMulSK/tree/main/sme/trio">sme/trio on GitHub →</a>
+  </div>
+  <div class="k v51">
+    <div class="tag">Single thread</div>
+    <h3>MaxMulSK v5.1</h3>
+    <div class="sub">Any shape</div>
+    <div class="nums">
+      <div><b>1.19×</b><span>Accelerate (1 thread)</span></div>
+      <div><b>1.08×</b><span>MpGEMM (1 thread)</span></div>
+    </div>
+    <p>The single-thread kernel, and the base Trio is built on. Packing is moved out of the compute loops, B is packed inside A's transpose in one pass, and ZA goes straight to C. Works on any shape.</p>
+    <a href="https://github.com/UlasSertan/MaxMulSK/tree/main/sme/v5">sme/v5 on GitHub →</a>
+  </div>
+</div>
+
+<div class="cta">
+  <h2>Code, usage and design notes</h2>
+  <p>Everything lives on GitHub: the code, how to build and call it, all 35 shapes and the design notes. A detailed write-up is on the way.</p>
+  <div class="links">
+    <a class="btn primary" href="https://github.com/UlasSertan/MaxMulSK">github.com/UlasSertan/MaxMulSK</a>
+  </div>
+</div>
+
+<footer>
+  MaxMulSK by Ulaş Sertan Kemeç · Apache-2.0 · <a href="https://github.com/UlasSertan/MaxMulSK">github.com/UlasSertan/MaxMulSK</a>
+</footer>
+
+</div>
+</body>
+</html>
